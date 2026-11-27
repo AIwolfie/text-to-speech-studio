@@ -92,7 +92,7 @@ echo -e "${GREEN}  ✓ Tkinter GUI framework ready${RESET}"
 
 # 4. Check Core Dependencies
 echo -e "${DIM}[4/4] Checking neural TTS dependencies...${RESET}"
-if ! "$PYTHON_CMD" -c "import edge_tts" &>/dev/null; then
+if ! "$PYTHON_CMD" -c "import edge_tts, numpy, imageio_ffmpeg" &>/dev/null; then
     echo -e "${YELLOW}  Installing dependencies from requirements.txt...${RESET}"
     "$PYTHON_CMD" -m pip install -r requirements.txt
 fi

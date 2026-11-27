@@ -247,7 +247,8 @@ def main() -> None:
     parser.add_argument("-r", "--rate", default="+0%", help="Speaking speed modifier, e.g. +15%%, -10%% (default: +0%%).")
     parser.add_argument("-p", "--pitch", default="+0Hz", help="Pitch shift, e.g. +20Hz, -15Hz (default: +0Hz).")
     parser.add_argument("--volume", default="+0%", help="Volume modifier, e.g. +20%%, -10%% (default: +0%%).")
-    parser.add_argument("--preset", help="Apply a studio audio preset (e.g. tiktok, podcast, trailer, storyteller, calm_asmr).")
+    parser.add_argument("--provider", choices=["edge", "echon"], default=None, help="TTS provider engine (choices: edge, echon).")
+    parser.add_argument("--preset", help="Apply a studio audio preset (e.g. echon, tiktok, podcast, trailer, storyteller, calm_asmr).")
     parser.add_argument("--list-presets", action="store_true", help="List all built-in and custom presets.")
     parser.add_argument("--srt", action="store_true", help="Generate synchronized SubRip (.srt) subtitle file.")
     parser.add_argument("--vtt", action="store_true", help="Generate synchronized WebVTT (.vtt) subtitle file.")
@@ -283,7 +284,10 @@ def main() -> None:
         asyncio.run(audition_voice(engine, voice=args.voice, output=args.output or f"sample_{args.voice}.mp3"))
         return
 
-    # Apply preset if specified
+    # Provider and voice resolution
+    if getattr(args, "provider", None) == "echon":
+        args.voice = "echon-narrator"
+
     voice = args.voice
     rate = args.rate
     pitch = args.pitch

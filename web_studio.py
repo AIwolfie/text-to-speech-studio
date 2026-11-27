@@ -12,6 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import tempfile
+import shutil
+import uuid
+from zipfile import ZipFile
+import studio_project
+import studio_audio
 import json
 import mimetypes
 import os
@@ -887,6 +893,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
   <main>
     <div class="tabs-nav">
+      <a class="tab-btn" href="/projects">Project Studio</a>
       <button class="tab-btn active" onclick="switchTab('studio', this)"><i class="fa-solid fa-microphone-lines"></i> Single Studio</button>
       <button class="tab-btn" onclick="switchTab('dialogue', this)"><i class="fa-solid fa-comments"></i> Dialogue Lab</button>
       <button class="tab-btn" onclick="switchTab('voices', this)"><i class="fa-solid fa-list-ul"></i> Voice Directory</button>
@@ -1570,12 +1577,14 @@ HTML_PAGE = r"""<!DOCTYPE html>
     }
 
     async function auditionVoice(voiceId) {
+      const input = document.getElementById('textInput');
+      const sample = input.value.slice(input.selectionStart, input.selectionEnd) || input.value.trim().slice(0, 320);
       try {
         const res = await fetch('/api/synthesize', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            text: `Hi! This is a neural sample of ${voiceId}. Ready to voice your next big project!`,
+            text: sample || `This is a sample of ${voiceId}.`,
             voice: voiceId
           })
         });
@@ -1738,6 +1747,23 @@ class WebStudioHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
+        assets = {"/projects": ("projects.html", "text/html; charset=utf-8"),
+                  "/projects.js": ("projects.js", "text/javascript; charset=utf-8")}
+        if path in assets:
+            name, mime = assets[path]
+            content = Path(__file__).with_name(name).read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            return
+        if path == "/api/project/offline":
+            root, model = studio_audio.echon_paths()
+            self._send_json({"runtime": (root / "src" / "inference.py").is_file(),
+                             "checkpoint": model.is_file(), "path": str(root)})
+            return
+
         if path in ("/", "/index.html"):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1780,7 +1806,7 @@ class WebStudioHandler(BaseHTTPRequestHandler):
             if not resolved.is_relative_to(STATIC_OUTPUT_DIR.resolve()):
                 self.send_error(HTTPStatus.FORBIDDEN, "Access denied")
                 return
-            if fpath.exists():
+            if fpath.is_file():
                 ctype, _ = mimetypes.guess_type(str(fpath))
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", ctype or "application/octet-stream")
@@ -1788,7 +1814,7 @@ class WebStudioHandler(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-cache, must-revalidate")
                 self.end_headers()
                 with open(fpath, "rb") as f:
-                    self.wfile.write(f.read())
+                    shutil.copyfileobj(f, self.wfile, length=256 * 1024)
                 return
             self.send_error(HTTPStatus.NOT_FOUND, "File not found")
             return
@@ -1800,11 +1826,60 @@ class WebStudioHandler(BaseHTTPRequestHandler):
         path = parsed.path
 
         length = int(self.headers.get("Content-Length", 0))
+        if path == "/api/project/open":
+            try:
+                with tempfile.TemporaryFile() as source:
+                    remaining = length
+                    while remaining > 0:
+                        chunk = self.rfile.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            raise ValueError("Incomplete project upload.")
+                        source.write(chunk)
+                        remaining -= len(chunk)
+                    source.seek(0)
+                    project = studio_project.restore(source, STATIC_OUTPUT_DIR)
+                self._send_json(project)
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=400)
+            return
         body = self.rfile.read(length) if length > 0 else b"{}"
         try:
             data = json.loads(body.decode("utf-8"))
         except Exception:
             data = {}
+
+        if path.startswith("/api/project/"):
+            try:
+                if path == "/api/project/take":
+                    self._send_json(studio_project.render(engine, STATIC_OUTPUT_DIR, data))
+                elif path == "/api/project/parse":
+                    from dataclasses import asdict
+                    lines = []
+                    for line in engine.parse_dialogue_script(data["text"]):
+                        for phrase in studio_audio.phrases(line.text):
+                            lines.append({**asdict(line), "text": phrase})
+                    self._send_json(lines)
+                elif path == "/api/project/save":
+                    name = uuid.uuid4().hex + ".ttsp"
+                    studio_project.archive(data, STATIC_OUTPUT_DIR, STATIC_OUTPUT_DIR / name)
+                    self._send_json({"url": "/static/" + name})
+                elif path == "/api/project/mix":
+                    name = uuid.uuid4().hex
+                    dest = STATIC_OUTPUT_DIR / name
+                    metadata = studio_project.mix(engine, data["project"], STATIC_OUTPUT_DIR, dest, data.get("stems", False))
+                    if data.get("stems"):
+                        with ZipFile(dest / "mix.zip", "w") as bundle:
+                            for file in dest.iterdir():
+                                if file.suffix != ".zip":
+                                    bundle.write(file, file.name)
+                    self._send_json({**metadata, "url": "/static/" + name + "/"})
+                else:
+                    self._send_json({"error": "Unknown project action."}, status=404)
+            except (ConnectionError, TimeoutError) as exc:
+                self._send_json({"error": str(exc)}, status=503)
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=400)
+            return
 
         if path == "/api/synthesize":
             text = data.get("text", "").strip()
@@ -1832,7 +1907,7 @@ class WebStudioHandler(BaseHTTPRequestHandler):
                 self._send_json(
                     {
                         "success": True,
-                        "audio_url": f"/static/{out_filename}",
+                        "audio_url": f"/static/{Path(res.audio_path).name}",
                         "srt_url": f"/static/{Path(res.srt_path).name}" if res.srt_path else None,
                         "vtt_url": f"/static/{Path(res.vtt_path).name}" if res.vtt_path else None,
                         "srt_text": res.srt_subtitles,
@@ -1864,7 +1939,7 @@ class WebStudioHandler(BaseHTTPRequestHandler):
                 self._send_json(
                     {
                         "success": True,
-                        "audio_url": f"/static/{out_filename}",
+                        "audio_url": f"/static/{Path(res.audio_path).name}",
                         "srt_url": f"/static/{Path(res.srt_path).name}" if res.srt_path else None,
                         "vtt_url": f"/static/{Path(res.vtt_path).name}" if res.vtt_path else None,
                         "duration_sec": res.duration_estimate_sec,

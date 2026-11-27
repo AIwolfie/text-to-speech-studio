@@ -31,6 +31,16 @@
 
 ---
 
+## Project Studio
+
+Open **Project Studio** from the web or desktop header. The desktop button opens the same editor in your browser. Paste a script such as `Alice: Welcome to the show.`, add it to the timeline, and choose **Render pending lines**. Each completed line is checkpointed. After an interruption, reopen the same browser profile and address and render the pending lines to resume.
+
+* **Save portable project** downloads a versioned `.ttsp` archive with the script, pronunciation rules, mix settings, edited captions, and recorded takes. Use **Open project** to continue on another machine. Browser drafts reference takes in the server's `web_output/takes` directory.
+* Expand **Compare voices on this line** to audition a selection and assign a voice to the speaker. **Record another take** keeps earlier versions available. Editing a line, voice, or applicable pronunciation rule schedules that line for synthesis again.
+* Set pauses or drag clips along speaker tracks. Use **Move up**, **Move down**, and numeric start times for keyboard editing. Caption times are relative to each clip and move with it.
+* **Preview mix** and **Export master & stems** use the same 24 kHz mono timeline. The export includes aligned WAV tracks, SRT and WebVTT captions, and a JSON speaker-to-file map with RMS and peak measurements in dBFS.
+* For local synthesis, set `ECHON_HOME` to an installed ECHON repository containing `src/inference.py` and a supported checkpoint under `checkpoints/`. Install that model's inference dependencies in the studio's Python environment. Open **Voice setup**, select **Offline-only project**, and run **Test offline voice**. Existing recordings can be mixed without contacting a speech provider.
+
 ## ⚡ The Benchmark: Why TTS Studio Hits Different
 
 | Feature / Metric | 🎙️ **TTS Studio v2.0** | 🤖 **ElevenLabs** | 🧠 **OpenAI TTS** | ☁️ **AWS Polly** | 🌐 **Google Cloud TTS** |

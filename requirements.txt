@@ -6,3 +6,7 @@ rich>=13.0.0
 
 # In-App Desktop Playback (Optional)
 pygame>=2.5.0
+
+# Portable audio decoder and MP3 encoder for dialogue and project renders
+imageio-ffmpeg>=0.5
+numpy>=1.24

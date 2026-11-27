@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Project Studio · Text to Speech Studio</title>
+<style>
+:root{color-scheme:dark;font:16px/1.5 "Segoe UI",sans-serif;background:#101519;color:#edf2ef;--line:#344047;--muted:#b1beb9;--mint:#a9edc7}
+*{box-sizing:border-box}body{margin:0}header,main{max-width:1180px;margin:auto;padding:18px clamp(16px,4vw,55px)}header{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}a{color:var(--mint)}h1,h2,h3,p{margin:0}h1{font-size:clamp(26px,4vw,46px);letter-spacing:-.045em}h2{font-size:21px}h3{font-size:16px}
+section,details.panel{margin:18px 0;background:#192125;border:1px solid var(--line);border-radius:12px;padding:18px}
+.toolbar,.fields,.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.toolbar{margin:12px 0}.fields{align-items:end}.fields label{flex:1 1 110px}
+label{display:block;color:var(--muted);font-size:.86rem}input,textarea,button,select{font:inherit;color:inherit}
+input:not([type=checkbox]),textarea,select{width:100%;background:#11181c;color:#f2f5f3;border:1px solid #46555c;border-radius:6px;padding:8px}textarea{resize:vertical}
+button,.file{background:#28343a;border:1px solid #49595f;color:#f0f5f2;border-radius:7px;padding:8px 12px;cursor:pointer;font:inherit}
+button:hover,.file:hover{border-color:var(--mint)}button:disabled{opacity:.48;cursor:default}button.primary{background:var(--mint);color:#10241b;font-weight:650}
+:focus-visible{outline:3px solid var(--mint);outline-offset:2px}summary{cursor:pointer;font-weight:600}fieldset{border:0;margin:0;padding:0;min-width:0}
+.line{padding:14px 0;border-top:1px solid var(--line)}.line>.fields,.line>label,.line>.actions,.line>details{margin-top:8px}.line summary,.hint,output{color:var(--muted);font-size:.9rem}
+#status{position:sticky;bottom:0;background:#122620;padding:10px 16px;border-left:3px solid var(--mint);margin:16px 0;z-index:2}[hidden]{display:none!important}audio{width:min(100%,480px);display:block;margin:8px 0}.track{display:grid;grid-template-columns:110px minmax(0,1fr);gap:8px;align-items:center;margin:8px 0}.track strong{overflow-wrap:anywhere;font-size:.85rem}.rail{height:42px;background:#10171a;border-radius:5px;position:relative}.clip{position:absolute;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;top:3px;height:36px;background:#315548;padding:2px 4px;font-size:.8rem;min-width:6px}#exports a{margin-right:14px}#offlineStatus{display:block}.cue{display:grid;grid-template-columns:80px 80px minmax(110px,1fr) auto;gap:5px;align-items:end;margin:6px 0}@media(max-width:580px){section{padding:12px}.cue{grid-template-columns:1fr 1fr}.track{grid-template-columns:70px minmax(0,1fr)}}
+</style>
+<header><strong>Text to Speech Studio</strong><a href="/">Single Studio</a></header>
+<main><h1>Project Studio</h1>
+<fieldset id="editor">
+<label>Project name<input id="name" value="Untitled session"></label>
+<div class="toolbar"><button id="save">Save portable project</button><button id="open">Open project</button><input hidden type="file" id="file" accept=".ttsp"><button id="new">New project</button></div>
+<section><h2>Script</h2><label for="script">Paste narration or dialogue, one speaker per line</label><textarea id="script" rows="3" placeholder="Alice: Welcome to the show."></textarea>
+<div class="toolbar"><button id="import">Add script to timeline</button><button id="add">Add blank line</button></div></section>
+<details class="panel"><summary>Pronunciation dictionary</summary><p class="hint">Choose the spelling, spoken form, and optional language or locale.</p><div id="rules"></div><button id="addRule">Add pronunciation</button></details>
+<details class="panel"><summary>Voice setup</summary><label><input type="checkbox" id="offline"> Offline-only project</label><output id="offlineStatus"></output><div class="toolbar"><button id="testLocal">Test offline voice</button><button id="catalog">Load online voice catalog</button></div><audio id="testPlayer" controls hidden></audio></details>
+<section><h2>Timeline</h2><p class="hint">Drag a clip along its track or set its start in seconds below. Blank start times follow the previous line.</p><div id="tracks"></div><div id="lines"></div></section>
+<datalist id="voices"><option>echon-narrator</option><option>en-US-ChristopherNeural</option><option>en-US-JennyNeural</option><option>en-US-GuyNeural</option></datalist>
+<section><h2>Mix &amp; export</h2><div id="gains" class="fields"></div>
+<div class="toolbar"><button class="primary" id="render">Render pending lines</button><button id="preview">Preview mix</button><button id="export">Export master &amp; stems</button></div>
+<audio id="player" controls hidden></audio><div id="exports"></div><output id="meter"></output></section>
+</fieldset>
+<button id="stop" hidden>Stop after current line</button><div id="status" role="status" aria-live="polite">Ready</div>
+</main><script src="/projects.js" defer></script></html>

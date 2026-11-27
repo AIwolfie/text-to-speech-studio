@@ -60,7 +60,7 @@ elif [ -d "venv" ] && [ -f "venv/bin/activate" ]; then
 fi
 
 # 3. Dependencies check
-if ! "$PYTHON_CMD" -c "import edge_tts" &>/dev/null; then
+if ! "$PYTHON_CMD" -c "import edge_tts, numpy, imageio_ffmpeg" &>/dev/null; then
     echo -e "${YELLOW}Installing dependencies from requirements.txt...${RESET}"
     "$PYTHON_CMD" -m pip install -r requirements.txt
 fi

@@ -28,7 +28,7 @@ if %ERRORLEVEL% EQU 0 (
 )
 
 REM Auto-install dependencies if needed
-%PY% -c "import edge_tts" >nul 2>&1
+%PY% -c "import edge_tts, numpy, imageio_ffmpeg" >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
     echo Installing dependencies...
     %PY% -m pip install -r requirements.txt

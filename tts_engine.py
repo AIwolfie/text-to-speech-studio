@@ -12,17 +12,41 @@ import asyncio
 import datetime
 import json
 import os
+import sys
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+import threading
+import uuid
 import edge_tts
+import studio_audio
 
 DEFAULT_VOICE = "en-US-ChristopherNeural"
+ECHON_VOICE = "echon-narrator"
+ECHON_V1_VOICE = "echon-narrator-v1"
 
 # Curated voice presets for popular content creation styles
 BUILTIN_PRESETS: Dict[str, Dict[str, Any]] = {
+    "echon": {
+        "name": "ECHON Narrator",
+        "description": "100% offline, private neural speech synthesis by AIwolfie (4.88M student model + HiFi-GAN)",
+        "voice": "echon-narrator",
+        "rate": "+0%",
+        "pitch": "+0Hz",
+        "volume": "+0%",
+        "provider": "ECHON",
+    },
+    "echon_v1": {
+        "name": "ECHON Legacy Prototype (V1)",
+        "description": "Legacy 2.58M experimental prototype with Griffin-Lim",
+        "voice": "echon-narrator-v1",
+        "rate": "+0%",
+        "pitch": "+0Hz",
+        "volume": "+0%",
+        "provider": "ECHON",
+    },
     "tiktok": {
         "name": "TikTok / Reel Narrator",
         "description": "High-energy, punchy, crisp narration for short-form video",
@@ -179,8 +203,14 @@ class TTSStudioEngine:
     """Core synthesis and processing engine for Text-to-Speech Studio."""
 
     def __init__(self, data_dir: Optional[str] = None) -> None:
-        self.data_dir = Path(data_dir or Path.home() / ".tts_studio")
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        default_dir = Path(__file__).resolve().parent / ".tts_data"
+        self.data_dir = Path(data_dir or default_dir)
+        try:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self.data_dir = Path(__file__).resolve().parent / ".tts_data"
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+        self._echon_lock = threading.RLock()
         self.presets_file = self.data_dir / "custom_presets.json"
         self.history_file = self.data_dir / "history.json"
         self.voices_cache_file = self.data_dir / "voices_cache.json"
@@ -188,6 +218,30 @@ class TTSStudioEngine:
         self._cached_voices: Optional[List[Dict[str, Any]]] = None
         self._custom_presets: Dict[str, Dict[str, Any]] = self._load_custom_presets()
         self._history: List[HistoryItem] = self._load_history()
+
+
+    def _get_echon_engine(self, version: str = "canonical"):
+        """Lazy-load the standalone canonical ECHON neural inference engine."""
+        if not hasattr(self, "_echon_engine") or self._echon_engine is None:
+            echon_dir, target_ckpt = studio_audio.echon_paths()
+            if not echon_dir.exists():
+                raise FileNotFoundError(
+                    f"ECHON TTS project directory not found at {echon_dir}."
+                )
+            if str(echon_dir) not in sys.path:
+                sys.path.insert(0, str(echon_dir))
+            try:
+                from src.inference import EchonInferenceEngine
+                if not target_ckpt.exists():
+                    raise FileNotFoundError(f"ECHON TTS model checkpoint not found at {target_ckpt}.")
+                self._echon_engine = EchonInferenceEngine(checkpoint_path=target_ckpt)
+            except Exception as e:
+                raise RuntimeError(f"Failed to initialize ECHON TTS inference engine: {e}") from e
+        return self._echon_engine
+
+    def get_available_providers(self) -> List[str]:
+        """Return list of active TTS providers."""
+        return ["Edge TTS", "ECHON"]
 
     # ------------------------------------------------------------------ Metrics
 
@@ -261,24 +315,81 @@ class TTSStudioEngine:
                 age_days = (datetime.datetime.now().timestamp() - mtime) / 86400.0
                 if age_days < 7:
                     with open(self.voices_cache_file, "r", encoding="utf-8") as f:
-                        self._cached_voices = json.load(f)
+                        cached = json.load(f)
+                        echon_v = [
+                            {
+                                'Name': 'ECHON Neural Speech Model (en-US, ECHONNarrator V2)',
+                                'ShortName': 'echon-narrator',
+                                'Gender': 'Neutral',
+                                'Locale': 'en-US',
+                                'SuggestedCodec': 'audio-22khz-16bit-mono-pcm',
+                                'FriendlyName': 'ECHON Narrator V2 (High Fidelity Neural AI - Offline)',
+                                'Status': 'GA',
+                                'VoiceTag': {'VoicePersonalities': ['Calm', 'Narrative', 'LocalOffline', 'HiFi-GAN']},
+                                'Provider': 'ECHON',
+                            },
+                            {
+                                'Name': 'ECHON Neural Speech Model (en-US, ECHONNarrator V1)',
+                                'ShortName': 'echon-narrator-v1',
+                                'Gender': 'Neutral',
+                                'Locale': 'en-US',
+                                'SuggestedCodec': 'audio-22khz-16bit-mono-pcm',
+                                'FriendlyName': 'ECHON Narrator V1 (Legacy Prototype - Offline)',
+                                'Status': 'GA',
+                                'VoiceTag': {'VoicePersonalities': ['Calm', 'Narrative', 'Prototype', 'Griffin-Lim']},
+                                'Provider': 'ECHON',
+                            }
+                        ]
+                        for ev in echon_v:
+                            if not any(v.get("ShortName") == ev["ShortName"] for v in cached):
+                                cached = [ev] + cached
+                        self._cached_voices = cached
                         return self._cached_voices
             except Exception:
                 pass
 
         try:
             voices = await edge_tts.list_voices()
-            self._cached_voices = voices
-            self._atomic_json_write(self.voices_cache_file, voices)
-            return voices
+            echon_voices: List[Dict[str, Any]] = [
+                {
+                    "Name": "ECHON Neural Speech Model (en-US, ECHONNarrator)",
+                    "ShortName": "echon-narrator",
+                    "Gender": "Neutral",
+                    "Locale": "en-US",
+                    "SuggestedCodec": "audio-22khz-16bit-mono-pcm",
+                    "FriendlyName": "ECHON Narrator (Local Neural AI - Offline)",
+                    "Status": "GA",
+                    "VoiceTag": {"VoicePersonalities": ["Calm", "Narrative", "LocalOffline"]},
+                    "Provider": "ECHON",
+                }
+            ]
+            all_voices = echon_voices + voices
+            self._cached_voices = all_voices
+            self._atomic_json_write(self.voices_cache_file, all_voices)
+            return all_voices
         except Exception as exc:
             if self._cached_voices:
                 return self._cached_voices
             if self.voices_cache_file.exists():
-                with open(self.voices_cache_file, "r", encoding="utf-8") as f:
-                    self._cached_voices = json.load(f)
-                return self._cached_voices
-            raise RuntimeError(f"Cannot list voices and no cache available: {exc}") from exc
+                try:
+                    with open(self.voices_cache_file, "r", encoding="utf-8") as f:
+                        self._cached_voices = json.load(f)
+                    return self._cached_voices
+                except Exception:
+                    pass
+            # Robust offline fallback: ECHON works 100% offline without internet
+            echon_v = [{
+                "Name": "ECHON Neural Speech Model (en-US, ECHONNarrator)",
+                "ShortName": "echon-narrator",
+                "Gender": "Neutral",
+                "Locale": "en-US",
+                "SuggestedCodec": "audio-22khz-16bit-mono-pcm",
+                "FriendlyName": "ECHON Narrator (Local Neural AI - Offline)",
+                "Status": "GA",
+                "VoiceTag": {"VoicePersonalities": ["Calm", "Narrative", "LocalOffline"]},
+                "Provider": "ECHON",
+            }]
+            return echon_v
 
     def list_voices_sync(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
         """Synchronous wrapper for list_voices."""
@@ -356,6 +467,67 @@ class TTSStudioEngine:
         cleaned_text = text.strip()
         if not cleaned_text:
             raise ValueError("Input text cannot be empty.")
+
+        if voice.lower().startswith("echon"):
+            if progress_cb:
+                progress_cb("Synthesizing speech locally with ECHON TTS (4.88M student model + HiFi-GAN)...")
+
+            if output_path is None:
+                output_path = self.generate_auto_filename(cleaned_text)
+
+            out_path = Path(output_path)
+            if out_path.suffix.lower() == ".mp3":
+                out_path = out_path.with_suffix(".wav")
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+
+            line = DialogueLine("Narrator", cleaned_text, voice, rate, pitch, volume)
+            samples, cues = await studio_audio.render_take(self, line, offline=True, sample_rate=22050)
+            wav_bytes = studio_audio.wav(samples, 22050)
+            out_path.write_bytes(wav_bytes)
+            duration_sec = len(samples) / (2 * 22050)
+
+            srt_text: Optional[str] = None
+            vtt_text: Optional[str] = None
+            srt_file: Optional[str] = None
+            vtt_file: Optional[str] = None
+
+            if generate_subtitles:
+                srt_text = self._format_cues(cues)
+                vtt_text = self._convert_srt_to_vtt(srt_text)
+                srt_file = str(out_path.with_suffix(".srt"))
+                vtt_file = str(out_path.with_suffix(".vtt"))
+                with open(srt_file, "w", encoding="utf-8") as f:
+                    f.write(srt_text)
+                with open(vtt_file, "w", encoding="utf-8") as f:
+                    f.write(vtt_text)
+
+            metrics = self.analyze_text(cleaned_text, rate)
+            result = SynthesisResult(
+                audio_path=str(out_path.resolve()),
+                audio_bytes=wav_bytes,
+                duration_estimate_sec=duration_sec,
+                character_count=metrics.char_count,
+                word_count=metrics.word_count,
+                voice="ECHON Narrator",
+                srt_subtitles=srt_text,
+                vtt_subtitles=vtt_text,
+                srt_path=srt_file,
+                vtt_path=vtt_file,
+            )
+            self._record_history(
+                text=cleaned_text,
+                voice="ECHON Narrator",
+                audio_path=result.audio_path,
+                duration=result.duration_estimate_sec,
+                char_count=result.character_count,
+                word_count=result.word_count,
+                has_subs=bool(generate_subtitles and srt_file),
+                mode="single",
+            )
+            if progress_cb:
+                progress_cb(f"Speech saved successfully to {out_path.name}")
+            return result
+
 
         if output_path is None:
             output_path = self.generate_auto_filename(cleaned_text)
@@ -546,75 +718,31 @@ class TTSStudioEngine:
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         master_audio_bytes = bytearray()
-        all_srt_entries: List[str] = []
-        current_time_ms = 0
-        srt_counter = 1
+        master_cues = []
         total_words = 0
         total_chars = 0
 
-        total_lines = len(parsed_lines)
         for idx, line in enumerate(parsed_lines, start=1):
             if progress_cb:
-                progress_cb(f"Synthesizing [{idx}/{total_lines}] {line.speaker} ({line.voice})...")
-
-            comm = edge_tts.Communicate(
-                text=line.text,
-                voice=line.voice,
-                rate=line.rate,
-                pitch=line.pitch,
-                volume=line.volume,
-            )
-
-            segment_audio = bytearray()
-            segment_submaker = edge_tts.SubMaker() if generate_subtitles else None
-
-            async for chunk in comm.stream():
-                if chunk["type"] == "audio":
-                    segment_audio.extend(chunk["data"])
-                elif generate_subtitles and segment_submaker is not None:
-                    if chunk["type"] in ("WordBoundary", "SentenceBoundary"):
-                        segment_submaker.feed(chunk)
-
-            # Append audio bytes
-            master_audio_bytes.extend(segment_audio)
-
-            # Calculate segment duration (approx from audio byte rate for 24kHz MP3 mono: ~6000 bytes/sec)
-            seg_duration_ms = int((len(segment_audio) / 6000.0) * 1000)
-            if seg_duration_ms < 500:
-                seg_duration_ms = 500
-
-            # Subtitle offset calculation
-            if generate_subtitles and segment_submaker is not None:
-                srt_data = segment_submaker.get_srt()
-                if srt_data.strip():
-                    for block in srt_data.strip().split("\n\n"):
-                        block_lines = block.split("\n")
-                        if len(block_lines) >= 3:
-                            time_match = re.match(
-                                r"(\d+:\d+:\d+,\d+)\s*-->\s*(\d+:\d+:\d+,\d+)",
-                                block_lines[1],
-                            )
-                            if time_match:
-                                start_ms = self._srt_time_to_ms(time_match.group(1)) + current_time_ms
-                                end_ms = self._srt_time_to_ms(time_match.group(2)) + current_time_ms
-                                sub_text = "\n".join(block_lines[2:])
-
-                                all_srt_entries.append(
-                                    f"{srt_counter}\n"
-                                    f"{self._ms_to_srt_time(start_ms)} --> {self._ms_to_srt_time(end_ms)}\n"
-                                    f"[{line.speaker}] {sub_text}"
-                                )
-                                srt_counter += 1
-
-            current_time_ms += seg_duration_ms
-            total_words += len(re.findall(r"\b\w+\b", line.text))
+                progress_cb(f"Synthesizing [{idx}/{len(parsed_lines)}] {line.speaker}...")
+            samples, cues = await studio_audio.render_take(self, line)
+            offset = round(len(master_audio_bytes) * 500 / studio_audio.RATE)
+            master_audio_bytes.extend(samples)
+            if generate_subtitles:
+                for start, end, label in cues:
+                    master_cues.append([offset + start, offset + end, f"[{line.speaker}] {label}"])
+            if idx < len(parsed_lines):
+                master_audio_bytes.extend(bytes(round(line.pause_after_ms * studio_audio.RATE / 1000) * 2))
+            total_words += len(line.text.split())
             total_chars += len(line.text)
-
-        # Write combined audio file
-        with open(out_path, "wb") as f:
-            f.write(master_audio_bytes)
-
-        srt_content = "\n\n".join(all_srt_entries) + "\n" if all_srt_entries else None
+        current_time_ms = round(len(master_audio_bytes) * 500 / studio_audio.RATE)
+        encoded = studio_audio.wav(master_audio_bytes)
+        if out_path.suffix.lower() == ".mp3":
+            encoded = studio_audio.transcode(encoded, "-f", "mp3")
+        elif out_path.suffix.lower() != ".wav":
+            raise ValueError("Choose MP3 or WAV for dialogue export.")
+        out_path.write_bytes(encoded)
+        srt_content = self._format_cues(master_cues) if master_cues else None
         vtt_content = self._convert_srt_to_vtt(srt_content) if srt_content else None
         srt_file = None
         vtt_file = None
@@ -629,7 +757,7 @@ class TTSStudioEngine:
 
         result = SynthesisResult(
             audio_path=str(out_path.resolve()),
-            audio_bytes=bytes(master_audio_bytes),
+            audio_bytes=encoded,
             duration_estimate_sec=round(current_time_ms / 1000.0, 2),
             character_count=total_chars,
             word_count=total_words,
@@ -768,7 +896,7 @@ class TTSStudioEngine:
 
     def _atomic_json_write(self, filepath: Path, data: Any) -> None:
         """Write JSON atomically via temp file + rename."""
-        tmp_path = filepath.with_suffix('.tmp')
+        tmp_path = filepath.with_suffix(f'.{uuid.uuid4().hex}.tmp')
         with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         tmp_path.replace(filepath)
@@ -781,6 +909,12 @@ class TTSStudioEngine:
         words = clean.split()
         base = "_".join(words[:4])[:40].strip("_") or "speech"
         return f"{base}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp3"
+
+    def _format_cues(self, cues):
+        return "\n\n".join(
+            f"{index}\n{self._ms_to_srt_time(start)} --> {self._ms_to_srt_time(end)}\n{text}"
+            for index, (start, end, text) in enumerate(cues, 1)
+        ) + "\n"
 
     @staticmethod
     def _convert_srt_to_vtt(srt_content: str) -> str:

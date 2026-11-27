@@ -286,6 +286,7 @@ class TTSStudioGUI:
         right_box = tk.Frame(header, bg=self.c_surface)
         right_box.pack(side="right", padx=18)
 
+        self._create_tool_btn(right_box, "Project Studio", self._open_projects).pack(side="left", padx=6)
         self.status_chip = tk.Label(
             right_box,
             text="● Engine Connecting...",
@@ -325,6 +326,18 @@ class TTSStudioGUI:
         self._build_player_deck()
 
     # -------------------------------------------------- Tab 1: Single Studio
+
+    def _open_projects(self):
+        """Use the same project editor and archive format as the web studio."""
+        import webbrowser
+        from web_studio import SilentThreadingHTTPServer, WebStudioHandler
+        if not hasattr(self, "_project_server"):
+            try:
+                self._project_server = SilentThreadingHTTPServer(("127.0.0.1", 7867), WebStudioHandler)
+            except OSError:
+                self._project_server = SilentThreadingHTTPServer(("127.0.0.1", 0), WebStudioHandler)
+            threading.Thread(target=self._project_server.serve_forever, daemon=True).start()
+        webbrowser.open(f"http://127.0.0.1:{self._project_server.server_port}/projects")
 
     def _build_studio_tab(self) -> None:
         frame = tk.Frame(self.tab_studio, bg=self.c_card, padx=16, pady=14)
@@ -1322,13 +1335,17 @@ class TTSStudioGUI:
             return
 
         v_id = self.voices_tree.item(selected[0])["values"][0]
+        try:
+            sample = self.studio_text.get("sel.first", "sel.last")
+        except tk.TclError:
+            sample = self.studio_text.get("1.0", "end-1c").strip()[:320]
         self.audition_status_lbl.config(text=f"Auditioning {v_id}...")
 
         def _worker() -> None:
             try:
                 sample_path = f"sample_{v_id}.mp3"
                 res = self.engine.synthesize_sync(
-                    text=f"Hi there! I am {v_id}. Ready to voice your next project.",
+                    text=sample or f"This is a sample of {v_id}.",
                     voice=v_id,
                     output_path=sample_path,
                 )
